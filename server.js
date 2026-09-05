@@ -1,6 +1,7 @@
 const express=require('express');
 const http=require('http');
 const crypto=require('crypto');
+const path=require('path');
 const {Server}=require('socket.io');
 const app=express(), server=http.createServer(app), io=new Server(server);
 app.use(express.json());
@@ -13,7 +14,9 @@ app.post('/api/admin-login',(req,res)=>{
   adminTokens.add(token);
   res.json({ok:true,token});
 });
-app.use(express.static('public'));
+// 素材使用瀏覽器快取，避免同一位玩家反覆向 Render 下載相同圖片。
+app.use('/assets',express.static(path.join(__dirname,'public','assets'),{maxAge:'1d',etag:true}));
+app.use(express.static('public',{etag:true,maxAge:0}));
 io.use((socket,next)=>{
   const token=String(socket.handshake.auth?.adminToken||'');
   socket.data.isAdmin=adminTokens.has(token);
@@ -23,41 +26,75 @@ io.use((socket,next)=>{
 const rooms=new Map();
 const code=()=>String(Math.floor(100000+Math.random()*900000));
 function onlineCount(r){return [...r.players.values()].filter(p=>p.online).length}
-function clean(r){return {code:r.code,settings:r.settings,state:r.state,online:onlineCount(r),players:[...r.players.values()].map(p=>({name:p.name,score:p.score||0,time:p.time??null,done:!!p.done,online:!!p.online})),countdownEnds:r.countdownEnds||null,started:r.started||null,gameEnds:r.gameEnds||null,gameId:r.gameId||null}}
+function clean(r){const st=readyStatsSafe(r);return {code:r.code,settings:r.settings,state:r.state,online:onlineCount(r),ready:st.ready,readyTotal:st.total,players:[...r.players.values()].map(p=>({name:p.name,score:p.score||0,time:p.time??null,done:!!p.done,online:!!p.online})),countdownEnds:r.countdownEnds||null,started:r.started||null,gameEnds:r.gameEnds||null,gameId:r.gameId||null}}
+function readyStatsSafe(r){const online=[...r.players.values()].filter(p=>p.online);return {ready:online.filter(p=>p.assetReady).length,total:online.length}}
 function rank(r){return [...r.players.values()].sort((a,b)=>(b.score||0)-(a.score||0)||((a.time??1e12)-(b.time??1e12))).map((p,i)=>({name:p.name,score:p.score||0,time:p.time??null,done:!!p.done,rank:i+1}))}
-function emit(r){io.to(r.code).emit('room',clean(r));io.to(r.code).emit('ranking',rank(r));}
-function clearTimers(r){if(r.timer)clearTimeout(r.timer);if(r.countdownTimer)clearInterval(r.countdownTimer);if(r.gameTicker)clearInterval(r.gameTicker);if(r.scheduleTimer)clearTimeout(r.scheduleTimer);r.timer=r.countdownTimer=r.gameTicker=r.scheduleTimer=null}
+function emitRoom(r){io.to(r.code).emit('room',clean(r))}
+function emitRanking(r){io.to(r.code).emit('ranking',rank(r))}
+// 排行榜最多每秒廣播一次；多人同時配對時不再每一組都全房廣播。
+function scheduleRanking(r,immediate=false){
+  if(!r)return;
+  if(immediate){if(r.rankTimer){clearTimeout(r.rankTimer);r.rankTimer=null}emitRanking(r);return}
+  if(r.rankTimer)return;
+  r.rankTimer=setTimeout(()=>{r.rankTimer=null;if(rooms.get(r.code)===r)emitRanking(r)},1000);
+}
+function emitState(r,withRank=false){emitRoom(r);if(withRank)scheduleRanking(r,true)}
+function clearTimers(r){
+  if(r.timer)clearTimeout(r.timer);if(r.countdownTimer)clearInterval(r.countdownTimer);if(r.gameTicker)clearInterval(r.gameTicker);if(r.scheduleTimer)clearTimeout(r.scheduleTimer);if(r.rankTimer)clearTimeout(r.rankTimer);
+  r.timer=r.countdownTimer=r.gameTicker=r.scheduleTimer=r.rankTimer=null;
+}
 function clearPlayTimers(r){if(r.timer)clearTimeout(r.timer);if(r.countdownTimer)clearInterval(r.countdownTimer);if(r.gameTicker)clearInterval(r.gameTicker);r.timer=r.countdownTimer=r.gameTicker=null}
-function finish(r,reason){if(!r||r.state==='finished')return;r.state='finished';clearTimers(r);emit(r);io.to(r.code).emit('finished',{reason,ranking:rank(r)});}
+function finish(r,reason){if(!r||r.state==='finished')return;r.state='finished';clearTimers(r);emitRoom(r);const rs=rank(r);io.to(r.code).emit('ranking',rs);io.to(r.code).emit('finished',{reason,ranking:rs});}
 function gameMs(settings){if(String(settings.gameMinutes)==='unlimited')return null;const n=Number(settings.gameMinutes);return Number.isFinite(n)&&n>0?n*60000:3*60000}
-function beginCountdown(r){
-  if(!r||r.state!=='waiting')return;
-  if(r.scheduleTimer){clearTimeout(r.scheduleTimer);r.scheduleTimer=null}
+function startActualCountdown(r){
+  if(!r||r.state!=='preparing')return;
   clearPlayTimers(r);
   r.state='countdown';
-  for(const p of r.players.values()){p.score=0;p.time=null;p.done=false}
   const seconds=Math.max(1,Number(r.settings.startCountdown)||5);
   r.countdownEnds=Date.now()+seconds*1000;
-  emit(r);
+  emitState(r,true);
+  let lastLeft=null;
   const tick=()=>{
     const left=Math.max(0,Math.ceil((r.countdownEnds-Date.now())/1000));
-    io.to(r.code).emit('countdownTick',left);
+    if(left!==lastLeft){lastLeft=left;io.to(r.code).emit('countdownTick',left)}
     if(left<=0){
       clearInterval(r.countdownTimer);r.countdownTimer=null;
-      r.state='playing';r.started=Date.now();r.gameId=`${r.code}-${r.started}`;r.gameSeed=Math.floor(Math.random()*0x7fffffff);
+      r.state='playing';r.started=Date.now();
       const ms=gameMs(r.settings);
-      r.gameEnds=ms? r.started+ms : null;
-      emit(r);
+      r.gameEnds=ms?r.started+ms:null;
+      emitRoom(r);
       io.to(r.code).emit('go',{settings:r.settings,gameSeed:r.gameSeed,gameEnds:r.gameEnds,started:r.started,gameId:r.gameId});
       if(ms){
         const gameTick=()=>{const remain=Math.max(0,r.gameEnds-Date.now());io.to(r.code).emit('gameTime',remain)};
         gameTick();r.gameTicker=setInterval(gameTick,1000);r.timer=setTimeout(()=>finish(r,'時間到'),ms);
-      }else{
-        io.to(r.code).emit('gameTime',null);
-      }
+      }else io.to(r.code).emit('gameTime',null);
     }
   };
-  tick();r.countdownTimer=setInterval(tick,250);
+  tick();r.countdownTimer=setInterval(tick,200);
+}
+function readyStats(r){
+  const online=[...r.players.values()].filter(p=>p.online);
+  return {ready:online.filter(p=>p.assetReady).length,total:online.length};
+}
+function maybeStartCountdown(r){
+  if(!r||r.state!=='preparing')return;
+  const st=readyStats(r);
+  io.to(r.code).emit('prepareStatus',st);
+  if(st.total===0||st.ready>=st.total)startActualCountdown(r);
+}
+function beginPreparation(r){
+  if(!r||r.state!=='waiting')return;
+  if(r.scheduleTimer){clearTimeout(r.scheduleTimer);r.scheduleTimer=null}
+  clearPlayTimers(r);
+  r.state='preparing';
+  for(const p of r.players.values()){p.score=0;p.time=null;p.done=false;p.assetReady=!p.online}
+  r.countdownEnds=null;
+  r.gameSeed=Math.floor(Math.random()*0x7fffffff);
+  r.gameId=`${r.code}-${Date.now()}-${r.gameSeed}`;
+  r.started=null;r.gameEnds=null;
+  emitState(r,true);
+  io.to(r.code).emit('prepareGame',{settings:r.settings,gameSeed:r.gameSeed,gameId:r.gameId});
+  maybeStartCountdown(r);
 }
 function scheduleIfNeeded(r){
   if(r.scheduleTimer){clearTimeout(r.scheduleTimer);r.scheduleTimer=null}
@@ -66,25 +103,25 @@ function scheduleIfNeeded(r){
   const at=Number(r.settings.scheduledAt)||0;
   if(!use||!at)return;
   const wait=at-Date.now();
-  if(wait<=0){beginCountdown(r);return}
-  r.scheduleTimer=setTimeout(()=>{if((Number(r.settings.scheduledAt)||0)>Date.now())scheduleIfNeeded(r);else beginCountdown(r)},Math.min(wait,2147483647));
+  if(wait<=0){beginPreparation(r);return}
+  r.scheduleTimer=setTimeout(()=>{if((Number(r.settings.scheduledAt)||0)>Date.now())scheduleIfNeeded(r);else beginPreparation(r)},Math.min(wait,2147483647));
 }
 
 io.on('connection',s=>{
   s.on('createRoom',(settings,cb)=>{
     if(!s.data.isAdmin)return cb?.({ok:false,msg:'主控驗證失敗，請重新登入'});
     let c;do c=code();while(rooms.has(c));
-    let r={code:c,settings,state:'waiting',players:new Map(),timer:null,countdownTimer:null,gameTicker:null,scheduleTimer:null,countdownEnds:null,started:null,gameEnds:null,gameId:null,gameSeed:null};
-    rooms.set(c,r);s.join(c);s.data.admin=c;scheduleIfNeeded(r);emit(r);cb?.({ok:true,code:c});
+    let r={code:c,settings,state:'waiting',players:new Map(),timer:null,countdownTimer:null,gameTicker:null,scheduleTimer:null,rankTimer:null,countdownEnds:null,started:null,gameEnds:null,gameId:null,gameSeed:null};
+    rooms.set(c,r);s.join(c);s.data.admin=c;scheduleIfNeeded(r);emitState(r,true);cb?.({ok:true,code:c});
   });
   s.on('saveSettings',({code,settings})=>{
     let r=rooms.get(code);
-    if(r&&s.data.admin===code&&r.state==='waiting'){r.settings=settings;scheduleIfNeeded(r);emit(r)}
+    if(r&&s.data.admin===code&&r.state==='waiting'){r.settings=settings;scheduleIfNeeded(r);emitState(r,false)}
   });
   s.on('peekRoom',({code},cb)=>{
     const r=rooms.get(String(code||''));
     if(!r)return cb?.({ok:false,msg:'找不到房間'});
-    cb?.({ok:true,state:r.state,settings:r.settings,countdownEnds:r.countdownEnds||null,started:r.started||null,gameEnds:r.gameEnds||null,gameId:r.gameId||null});
+    cb?.({ok:true,state:r.state,settings:r.settings,countdownEnds:r.countdownEnds||null,started:r.started||null,gameEnds:r.gameEnds||null,gameId:r.gameId||null,gameSeed:(r.state==='preparing'||r.state==='countdown')?r.gameSeed:null});
   });
   s.on('join',({code,name},cb)=>{
     let r=rooms.get(String(code||''));
@@ -96,19 +133,23 @@ io.on('connection',s=>{
       if(r.state!=='waiting')return cb?.({ok:false,msg:'比賽已開始，無法加入新玩家'});
       p={name,score:0,time:null,done:false,online:true};r.players.set(key,p);
     }else p.online=true;
-    s.join(r.code);s.data.room=r.code;s.data.key=key;emit(r);
-    cb?.({ok:true,returning,room:clean(r),resume:r.state==='playing'?{settings:r.settings,gameSeed:r.gameSeed,gameEnds:r.gameEnds,started:r.started,gameId:r.gameId}:null});
+    s.join(r.code);s.data.room=r.code;s.data.key=key;emitRoom(r);scheduleRanking(r);
+    cb?.({ok:true,returning,room:clean(r),resume:r.state==='playing'?{settings:r.settings,gameSeed:r.gameSeed,gameEnds:r.gameEnds,started:r.started,gameId:r.gameId}:null,prepare:(r.state==='preparing'||r.state==='countdown')?{settings:r.settings,gameSeed:r.gameSeed,gameId:r.gameId,countdownEnds:r.countdownEnds||null}:null});
   });
-  s.on('start',({code})=>{let r=rooms.get(code);if(!r||s.data.admin!==code||r.state!=='waiting')return;beginCountdown(r)});
+  s.on('start',({code})=>{let r=rooms.get(code);if(!r||s.data.admin!==code||r.state!=='waiting')return;beginPreparation(r)});
+  s.on('assetsReady',({gameId})=>{
+    let r=rooms.get(s.data.room),p=r?.players.get(s.data.key);
+    if(!r||!p||r.state!=='preparing'||String(gameId||'')!==String(r.gameId||''))return;
+    p.assetReady=true;maybeStartCountdown(r);
+  });
   s.on('progress',({score,time,done},cb)=>{
     let r=rooms.get(s.data.room),p=r?.players.get(s.data.key);if(!r||!p||r.state!=='playing')return cb?.({ok:false});
     p.score=Math.max(0,Number(score)||0);
     const newlyDone=!!done&&!p.done;
     if(newlyDone){p.time=Math.max(0,Number(time)||0);p.done=true}
-    emit(r);
-    const rs=rank(r);const mine=rs.find(x=>x.name.toLowerCase()===p.name.toLowerCase());
-    if(newlyDone){s.emit('completed',{ranking:rs,mine});}
-    cb?.({ok:true,ranking:rs,mine});
+    const rs=newlyDone?rank(r):null;
+    if(newlyDone){const mine=rs.find(x=>x.name.toLowerCase()===p.name.toLowerCase());s.emit('completed',{ranking:rs,mine});cb?.({ok:true,ranking:rs,mine});scheduleRanking(r,true)}
+    else{cb?.({ok:true});scheduleRanking(r,false)}
     if(newlyDone){
       let n=[...r.players.values()].filter(x=>x.done).length,goal=r.settings.finishGoal;
       if(goal!=='all'){
@@ -117,6 +158,6 @@ io.on('connection',s=>{
     }
   });
   s.on('deleteRoom',({code})=>{let r=rooms.get(code);if(r&&s.data.admin===code){clearTimers(r);io.to(code).emit('deleted');rooms.delete(code)}});
-  s.on('disconnect',()=>{let r=rooms.get(s.data.room),p=r?.players.get(s.data.key);if(p){p.online=false;emit(r)}});
+  s.on('disconnect',()=>{let r=rooms.get(s.data.room),p=r?.players.get(s.data.key);if(p){p.online=false;emitRoom(r);if(r.state==='preparing')maybeStartCountdown(r)}});
 });
 server.listen(process.env.PORT||3000,()=>console.log('Memory King running on '+(process.env.PORT||3000)));
