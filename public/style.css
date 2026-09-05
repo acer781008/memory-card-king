@@ -121,3 +121,9 @@ input,select,textarea{border-color:#cfd4ef;background:#fff;border-radius:10px}
 /* V1.1.9 多人順暢版：素材預載狀態與圖片失敗提示 */
 .asset-status{min-height:1.4em;margin:8px 0 2px;font-weight:800;color:#6754a8;text-align:center}
 .card img.img-failed{opacity:.25}
+
+/* V1.2.0：遊戲進行中改用輕量盤面，減少手機 GPU 合成與陰影負擔 */
+body.game-light{background-attachment:scroll}
+body.game-light .board{backdrop-filter:none!important;box-shadow:none!important;background:rgba(248,247,255,.97)!important}
+body.game-light .card{box-shadow:none!important;transition:none!important}
+body.game-light .topbar{box-shadow:none!important;backdrop-filter:none!important}

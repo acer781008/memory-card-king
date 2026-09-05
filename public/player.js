@@ -29,13 +29,13 @@ function showWaitingState(room){
   if(room?.state==='waiting'&&c.useScheduledStart&&at>Date.now()){
     waitStatusEl.textContent='尚未開放';scheduledCountdownEl.classList.remove('hidden');assetStatusEl.textContent='';
     const tick=()=>{const left=Math.max(0,at-Date.now());scheduledCountdownEl.textContent=`距離開賽時間：${fmtLong(left)}`;if(left<=0){clearInterval(scheduledTicker);scheduledTicker=null;waitStatusEl.textContent='準備開賽…';scheduledCountdownEl.textContent='即將進入開賽倒數';}};
-    tick();scheduledTicker=setInterval(tick,250);
+    tick();scheduledTicker=setInterval(tick,1000);
   }else{
-    waitStatusEl.textContent=room?.state==='countdown'?'準備開賽…':'等待主控開始遊戲…';scheduledCountdownEl.classList.add('hidden');scheduledCountdownEl.textContent='';if(room?.state!=='countdown')assetStatusEl.textContent='';
+    waitStatusEl.textContent=room?.state==='preparing'?'等待所有玩家素材載入完成…':room?.state==='countdown'?'準備開賽…':'等待主控開始遊戲…';scheduledCountdownEl.classList.add('hidden');scheduledCountdownEl.textContent='';if(room?.state!=='countdown'&&room?.state!=='preparing')assetStatusEl.textContent='';
   }
 }
 function fmtLong(ms){let x=Math.max(0,Math.ceil(ms/1000)),d=Math.floor(x/86400);x%=86400;let h=Math.floor(x/3600);x%=3600;let m=Math.floor(x/60),sec=x%60;return `${d?d+'天 ':''}${String(h).padStart(2,'0')}時 ${String(m).padStart(2,'0')}分 ${String(sec).padStart(2,'0')}秒`}
-function runLocalCountdown(ends){clearInterval(window._joinCountdown);const tick=()=>{const n=Math.max(0,Math.ceil((ends-Date.now())/1000));overlayEl.classList.remove('hidden');overlayEl.textContent=n>0?n:'開始！';if(n<=0){clearInterval(window._joinCountdown);setTimeout(()=>overlayEl.classList.add('hidden'),500)}};tick();window._joinCountdown=setInterval(tick,250)}
+function runLocalCountdown(ends){clearInterval(window._joinCountdown);const tick=()=>{const n=Math.max(0,Math.ceil((ends-Date.now())/1000));overlayEl.classList.remove('hidden');overlayEl.textContent=n>0?n:'開始！';if(n<=0){clearInterval(window._joinCountdown);setTimeout(()=>overlayEl.classList.add('hidden'),500)}};tick();window._joinCountdown=setInterval(tick,1000)}
 
 s.on('connect',()=>{
   if(!joinedOnce||!code||!me)return;
@@ -43,13 +43,14 @@ s.on('connect',()=>{
     if(!r?.ok)return;
     cfg=r.room.settings;
     if(r.room.state==='playing'&&r.resume){waitPanel.classList.add('hidden');startGame(r.resume.gameSeed,r.resume.gameId,r.resume.started,r.resume.gameEnds,true)}
-    else if(r.room.state==='countdown'&&r.room.countdownEnds){waitPanel.classList.remove('hidden');showWaitingState(r.room);if(r.prepare)prepareGame(r.prepare);runLocalCountdown(r.room.countdownEnds)}
+    else if((r.room.state==='preparing'||r.room.state==='countdown')&&r.prepare){waitPanel.classList.remove('hidden');showWaitingState(r.room);prepareGame(r.prepare);if(r.room.state==='countdown'&&r.room.countdownEnds)runLocalCountdown(r.room.countdownEnds)}
     else if(r.room.state==='waiting'){waitPanel.classList.remove('hidden');showWaitingState(r.room)}
   });
 });
 s.on('prepareGame',x=>prepareGame(x));
+s.on('prepareStatus',x=>{if(!x)return;waitPanel.classList.remove('hidden');waitStatusEl.textContent=`等待素材準備完成 ${x.ready}/${x.total}`;scheduledCountdownEl.classList.add('hidden')});
 s.on('countdownTick',n=>{clearInterval(scheduledTicker);scheduledTicker=null;waitStatusEl.textContent='準備開賽…';scheduledCountdownEl.classList.add('hidden');overlayEl.classList.remove('hidden');overlayEl.textContent=n>0?n:'開始！';if(n<=0)setTimeout(()=>overlayEl.classList.add('hidden'),500)});
-s.on('go',x=>{cfg=x.settings;waitPanel.classList.add('hidden');gamePanel.classList.remove('hidden');topBar.classList.remove('hidden');overlayEl.classList.add('hidden');startGame(x.gameSeed,x.gameId,x.started,x.gameEnds,false)});
+s.on('go',x=>{document.body.classList.add('game-light');cfg=x.settings;waitPanel.classList.add('hidden');gamePanel.classList.remove('hidden');topBar.classList.remove('hidden');overlayEl.classList.add('hidden');startGame(x.gameSeed,x.gameId,x.started,x.gameEnds,false)});
 s.on('gameTime',ms=>{if(!gamePanel.classList.contains('hidden')||completed)timerEl.textContent=ms==null?'∞':fmt(ms)});
 s.on('ranking',rs=>{latestRanking=rs;if(completed)renderCompleted(false)});
 s.on('completed',x=>{latestRanking=x.ranking||latestRanking;completed=true;clearInterval(ticker);lock=true;renderCompleted(false,x.mine)});
@@ -59,35 +60,55 @@ function prepareGame(x){
   if(!x?.gameId||!x?.gameSeed||!me||!code)return;
   cfg=x.settings||cfg||{};
   const nextCards=makeCards(personalSeed(x.gameSeed));
+  if(prepared?.gameId===x.gameId&&prepared.ready){s.emit('assetsReady',{gameId:x.gameId});return}
   prepared={gameId:x.gameId,gameSeed:x.gameSeed,cards:nextCards,ready:false};
   const urls=[...new Set(nextCards.filter(c=>c.img).map(c=>c.v))];
-  if(!urls.length){prepared.ready=true;assetStatusEl.textContent='✓ 牌面已準備完成';return}
+  waitStatusEl.textContent='正在準備你的牌面…';
+  if(!urls.length){prepared.ready=true;assetStatusEl.textContent='✓ 牌面已準備完成';s.emit('assetsReady',{gameId:x.gameId});return}
   assetStatusEl.textContent=`素材載入中 0/${urls.length}`;
-  preloadAssets(urls,(done,total)=>{if(prepared?.gameId===x.gameId)assetStatusEl.textContent=done>=total?'✓ 素材已準備完成':`素材載入中 ${done}/${total}`}).then(()=>{if(prepared?.gameId===x.gameId)prepared.ready=true});
+  preloadAssets(urls,(done,total)=>{if(prepared?.gameId===x.gameId)assetStatusEl.textContent=done>=total?'✓ 素材已準備完成':`素材載入中 ${done}/${total}`}).then(()=>{
+    if(prepared?.gameId!==x.gameId)return;
+    prepared.ready=true;
+    assetStatusEl.textContent='✓ 素材已準備完成，等待其他玩家';
+    s.emit('assetsReady',{gameId:x.gameId});
+  });
 }
 async function preloadAssets(urls,onProgress){
   let done=0,total=urls.length,index=0;
   const worker=async()=>{while(index<total){const i=index++;await loadAsset(urls[i]);done++;onProgress?.(done,total)}};
-  // 每台裝置最多同時載入 4 張，避免所有玩家開賽瞬間把圖片請求塞滿。
+  // 同一台裝置最多 4 張並行；載入後轉成本機 Blob URL 並先 decode，翻牌時不再向伺服器抓圖。
   const workers=Array.from({length:Math.min(4,total)},()=>worker());
   await Promise.all(workers);
 }
-function loadAsset(url){
-  if(assetCache.get(url)==='ok')return Promise.resolve(true);
-  if(assetCache.get(url)?.then)return assetCache.get(url);
-  const p=new Promise(resolve=>{
-    let tries=0;
-    const attempt=()=>{
-      const img=new Image();
-      img.decoding='async';
-      img.onload=()=>{assetCache.set(url,'ok');resolve(true)};
-      img.onerror=()=>{tries++;if(tries<3)setTimeout(attempt,250*tries);else{assetCache.set(url,'failed');resolve(false)}};
-      img.src=tries?`${url}?retry=${Date.now()}`:url;
-    };
-    setTimeout(attempt,Math.floor(Math.random()*180));
-  });
-  assetCache.set(url,p);return p;
+async function loadAsset(url){
+  const cached=assetCache.get(url);
+  if(cached?.status==='ok')return cached.objectUrl;
+  if(cached?.promise)return cached.promise;
+  const promise=(async()=>{
+    let attempt=0;
+    while(true){
+      attempt++;
+      try{
+        const res=await fetch(url,{cache:'force-cache'});
+        if(!res.ok)throw new Error('HTTP '+res.status);
+        const blob=await res.blob();
+        const objectUrl=URL.createObjectURL(blob);
+        const img=new Image();
+        img.src=objectUrl;
+        if(img.decode)await img.decode();
+        else await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject});
+        assetCache.set(url,{status:'ok',objectUrl,img});
+        return objectUrl;
+      }catch(err){
+        // 網路慢就持續補載；不使用 ?retry=...，避免每次都強制重新下載。
+        await new Promise(r=>setTimeout(r,Math.min(2500,350*attempt)));
+      }
+    }
+  })();
+  assetCache.set(url,{status:'loading',promise});
+  return promise;
 }
+function assetUrl(url){const c=assetCache.get(url);return c?.status==='ok'?c.objectUrl:url}
 
 function startGame(seed,gameId,started,gameEnds,resume){
   cfg=cfg||{};currentGameSeed=seed||1;currentGameId=gameId||`${code}-${started||Date.now()}`;completed=false;resultEl.classList.add('hidden');gamePanel.classList.remove('hidden');topBar.classList.remove('hidden');
@@ -103,7 +124,7 @@ function startGame(seed,gameId,started,gameEnds,resume){
     renderBoard([]);saveState([]);
   }
   scoreEl();clearInterval(ticker);
-  if(gameEnds){ticker=setInterval(()=>{timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))},250);timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))}else timerEl.textContent='∞';
+  if(gameEnds){ticker=setInterval(()=>{timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))},1000);timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))}else timerEl.textContent='∞';
 }
 function dims(){const v=String(cfg.boardSize||'4x4');const m=v.match(/(4|6|8)x\1/);if(m){const n=+m[1];return [n,n]}const total=Number(cfg.cards)||16;const n=total>=64?8:total>=36?6:4;return [n,n]}
 function makeCards(seed){
@@ -116,9 +137,9 @@ function makeCards(seed){
 }
 function renderBoard(matched){const [cols]=dims();boardEl.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;boardEl.innerHTML=cards.map((c,i)=>`<div class="card${matched.includes(i)?' open matched':''}" data-i="${i}">${matched.includes(i)?cardInner(c):'<span>✦</span>'}</div>`).join('');[...boardEl.children].forEach(el=>{el.onclick=()=>flip(el);bindImages(el)})}
 function flip(el){if(lock||completed||el.classList.contains('open')||el.classList.contains('matched'))return;open(el);if(!first){first=el;return}lock=true;let a=cards[+first.dataset.i],b=cards[+el.dataset.i];if(a.key===b.key){setTimeout(()=>{first.classList.add('matched');el.classList.add('matched');const matchedEls=[...document.querySelectorAll('.card.matched')].map(x=>+x.dataset.i);first=null;lock=false;score+=10;scoreEl();saveState(matchedEls);let done=matchedEls.length===cards.length;sendProgress(done,done);},280)}else setTimeout(()=>{close(first);close(el);first=null;lock=false},650)}
-function cardInner(c){return c.img?`<img src="${c.v}" data-src="${c.v}" alt="" decoding="async">`:`<span class="txt">${c.v}</span>`}
+function cardInner(c){return c.img?`<img src="${assetUrl(c.v)}" data-src="${c.v}" alt="" decoding="sync">`:`<span class="txt">${c.v}</span>`}
 function bindImages(root){root.querySelectorAll?.('img[data-src]').forEach(img=>{img.onerror=()=>retryVisibleImage(img)})}
-function retryVisibleImage(img){if(!img||img.dataset.retrying==='1')return;const base=img.dataset.src;let n=Number(img.dataset.tries||0);if(n>=2){img.onerror=null;img.classList.add('img-failed');img.alt='圖片載入失敗';return}img.dataset.retrying='1';img.dataset.tries=String(n+1);setTimeout(()=>{img.dataset.retrying='0';img.src=`${base}?retry=${Date.now()}`},300*(n+1))}
+function retryVisibleImage(img){if(!img)return;const base=img.dataset.src;loadAsset(base).then(local=>{if(img.isConnected)img.src=local})}
 function open(el){let c=cards[+el.dataset.i];el.classList.add('open');el.innerHTML=cardInner(c);bindImages(el)}
 function close(el){if(!el)return;el.classList.remove('open');el.innerHTML='<span>✦</span>'}
 
@@ -137,7 +158,7 @@ function flushProgress(){
 }
 
 function renderCompleted(final=false,mineOverride=null,reason=''){
-  gamePanel.classList.add('hidden');resultEl.classList.remove('hidden');const mine=mineOverride||latestRanking.find(x=>x.name===me);const tm=mine?.time==null?'—':fmt(mine.time);const sec=mine?.time==null?'':`（${Math.floor(mine.time/1000)}秒）`;
+  document.body.classList.remove('game-light');gamePanel.classList.add('hidden');resultEl.classList.remove('hidden');const mine=mineOverride||latestRanking.find(x=>x.name===me);const tm=mine?.time==null?'—':fmt(mine.time);const sec=mine?.time==null?'':`（${Math.floor(mine.time/1000)}秒）`;
   resultEl.innerHTML=`<h2>${final?'🏁 本局結束':'🎉 配對完成！'}</h2><div class="myresult"><b>${mine?`第 ${mine.rank} 名`:'已完成'}</b><span>⭐ ${mine?.score??score} 分</span><span>⏱ 完成時間 ${tm}${sec}</span></div>${!final?'<p class="status">已完成，等待其他玩家完成…</p>':`<p class="status">${reason||'遊戲結束'}</p>`}<h3>🏆 ${final?'最終':'目前'}排行榜</h3><table class="ranking"><thead><tr><th>排名</th><th>玩家</th><th>分數</th><th>完成時間</th></tr></thead><tbody>${latestRanking.map(p=>`<tr><td>${p.rank}</td><td>${esc(p.name)}</td><td>${p.score}</td><td>${p.time==null?'—':fmt(p.time)}</td></tr>`).join('')}</tbody></table>`
 }
 function storageKey(){return `mk:${code}:game:${currentGameId}:${me}`}
