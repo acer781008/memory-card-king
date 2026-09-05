@@ -1,8 +1,10 @@
 const s=io(),$=id=>document.getElementById(id);
 let code='',me='',cfg=null,startAt=0,score=0,lock=false,first=null,cards=[],ticker=null,currentGameId=null,currentGameSeed=1,completed=false,latestRanking=[],joinedOnce=false;
+let prepared=null,progressTimer=null,pendingProgress=null,lastProgressSentAt=0;
+const assetCache=new Map();
 const idioms=['守株|待兔','畫蛇|添足','一心|一意','自相|矛盾','亡羊|補牢','井底|之蛙','掩耳|盜鈴','刻舟|求劍','狐假|虎威','胸有|成竹','雪中|送炭','錦上|添花','半途|而廢','水落|石出','大驚|小怪','東張|西望','七上|八下','三心|二意','九牛|一毛','四面|八方','異口|同聲','手忙|腳亂','天長|地久','風平|浪靜','千言|萬語','百發|百中','五花|八門','一舉|兩得','名列|前茅','聚精|會神','全神|貫注','迫不|及待'];
 const poems=['床前明月光|疑是地上霜','舉頭望明月|低頭思故鄉','白日依山盡|黃河入海流','欲窮千里目|更上一層樓','春眠不覺曉|處處聞啼鳥','夜來風雨聲|花落知多少','兩個黃鸝鳴翠柳|一行白鷺上青天','窗含西嶺千秋雪|門泊東吳萬里船','松下問童子|言師採藥去','只在此山中|雲深不知處','慈母手中線|遊子身上衣','誰言寸草心|報得三春暉','離離原上草|一歲一枯榮','野火燒不盡|春風吹又生','空山不見人|但聞人語響','返景入深林|復照青苔上','月落烏啼霜滿天|江楓漁火對愁眠','姑蘇城外寒山寺|夜半鐘聲到客船','朝辭白帝彩雲間|千里江陵一日還','兩岸猿聲啼不住|輕舟已過萬重山','千山鳥飛絕|萬徑人蹤滅','孤舟蓑笠翁|獨釣寒江雪','危樓高百尺|手可摘星辰','不敢高聲語|恐驚天上人','小時不識月|呼作白玉盤','又疑瑤台鏡|飛在青雲端','獨在異鄉為異客|每逢佳節倍思親','遙知兄弟登高處|遍插茱萸少一人','故人西辭黃鶴樓|煙花三月下揚州','孤帆遠影碧空盡|唯見長江天際流','葡萄美酒夜光杯|欲飲琵琶馬上催','醉臥沙場君莫笑|古來征戰幾人回'];
-const roomInput=$('room'),nameInput=$('name'),joinPanel=$('join'),waitPanel=$('wait'),gamePanel=$('game'),topBar=$('top'),overlayEl=$('overlay'),msgEl=$('msg'),roomShowEl=$('roomShow'),rulesEl=$('rules'),timerEl=$('timer'),boardEl=$('board'),resultEl=$('result'),latePanel=$('late'),waitStatusEl=$('waitStatus'),scheduledCountdownEl=$('scheduledCountdown');
+const roomInput=$('room'),nameInput=$('name'),joinPanel=$('join'),waitPanel=$('wait'),gamePanel=$('game'),topBar=$('top'),overlayEl=$('overlay'),msgEl=$('msg'),roomShowEl=$('roomShow'),rulesEl=$('rules'),timerEl=$('timer'),boardEl=$('board'),resultEl=$('result'),latePanel=$('late'),waitStatusEl=$('waitStatus'),scheduledCountdownEl=$('scheduledCountdown'),assetStatusEl=$('assetStatus');
 roomInput.value=new URLSearchParams(location.search).get('room')||'';
 const savedName=roomInput.value?localStorage.getItem('mk:'+roomInput.value+':name'):'';if(savedName)nameInput.value=savedName;
 if(roomInput.value){s.emit('peekRoom',{code:roomInput.value},r=>{if(!r?.ok)return;if(r.state!=='waiting'&&!savedName){joinPanel.classList.add('hidden');latePanel.classList.remove('hidden');$('lateMsg').textContent=r.state==='finished'?'本局已結束':'比賽已開始';}})}
@@ -14,8 +16,8 @@ $('joinBtn').onclick=()=>{
     if(!r?.ok){msgEl.textContent=r?.msg||'加入失敗';return}
     cfg=r.room.settings;joinedOnce=true;localStorage.setItem('mk:'+code+':name',me);joinPanel.classList.add('hidden');roomShowEl.textContent=code;rulesEl.textContent=ruleText(cfg);
     if(r.room.state==='playing'&&r.resume){startGame(r.resume.gameSeed,r.resume.gameId,r.resume.started,r.resume.gameEnds,true);return}
-    waitPanel.classList.remove('hidden');
-    showWaitingState(r.room);
+    waitPanel.classList.remove('hidden');showWaitingState(r.room);
+    if(r.prepare)prepareGame(r.prepare);
     if(r.room.state==='countdown'&&r.room.countdownEnds)runLocalCountdown(r.room.countdownEnds);
   })
 };
@@ -25,15 +27,14 @@ function showWaitingState(room){
   clearInterval(scheduledTicker);scheduledTicker=null;
   const c=room?.settings||cfg||{};const at=Number(c.scheduledAt)||0;
   if(room?.state==='waiting'&&c.useScheduledStart&&at>Date.now()){
-    waitStatusEl.textContent='尚未開放';scheduledCountdownEl.classList.remove('hidden');
+    waitStatusEl.textContent='尚未開放';scheduledCountdownEl.classList.remove('hidden');assetStatusEl.textContent='';
     const tick=()=>{const left=Math.max(0,at-Date.now());scheduledCountdownEl.textContent=`距離開賽時間：${fmtLong(left)}`;if(left<=0){clearInterval(scheduledTicker);scheduledTicker=null;waitStatusEl.textContent='準備開賽…';scheduledCountdownEl.textContent='即將進入開賽倒數';}};
     tick();scheduledTicker=setInterval(tick,250);
   }else{
-    waitStatusEl.textContent=room?.state==='countdown'?'準備開賽…':'等待主控開始遊戲…';scheduledCountdownEl.classList.add('hidden');scheduledCountdownEl.textContent='';
+    waitStatusEl.textContent=room?.state==='countdown'?'準備開賽…':'等待主控開始遊戲…';scheduledCountdownEl.classList.add('hidden');scheduledCountdownEl.textContent='';if(room?.state!=='countdown')assetStatusEl.textContent='';
   }
 }
 function fmtLong(ms){let x=Math.max(0,Math.ceil(ms/1000)),d=Math.floor(x/86400);x%=86400;let h=Math.floor(x/3600);x%=3600;let m=Math.floor(x/60),sec=x%60;return `${d?d+'天 ':''}${String(h).padStart(2,'0')}時 ${String(m).padStart(2,'0')}分 ${String(sec).padStart(2,'0')}秒`}
-
 function runLocalCountdown(ends){clearInterval(window._joinCountdown);const tick=()=>{const n=Math.max(0,Math.ceil((ends-Date.now())/1000));overlayEl.classList.remove('hidden');overlayEl.textContent=n>0?n:'開始！';if(n<=0){clearInterval(window._joinCountdown);setTimeout(()=>overlayEl.classList.add('hidden'),500)}};tick();window._joinCountdown=setInterval(tick,250)}
 
 s.on('connect',()=>{
@@ -42,37 +43,99 @@ s.on('connect',()=>{
     if(!r?.ok)return;
     cfg=r.room.settings;
     if(r.room.state==='playing'&&r.resume){waitPanel.classList.add('hidden');startGame(r.resume.gameSeed,r.resume.gameId,r.resume.started,r.resume.gameEnds,true)}
-    else if(r.room.state==='countdown'&&r.room.countdownEnds){waitPanel.classList.remove('hidden');showWaitingState(r.room);runLocalCountdown(r.room.countdownEnds)}
+    else if(r.room.state==='countdown'&&r.room.countdownEnds){waitPanel.classList.remove('hidden');showWaitingState(r.room);if(r.prepare)prepareGame(r.prepare);runLocalCountdown(r.room.countdownEnds)}
     else if(r.room.state==='waiting'){waitPanel.classList.remove('hidden');showWaitingState(r.room)}
   });
 });
+s.on('prepareGame',x=>prepareGame(x));
 s.on('countdownTick',n=>{clearInterval(scheduledTicker);scheduledTicker=null;waitStatusEl.textContent='準備開賽…';scheduledCountdownEl.classList.add('hidden');overlayEl.classList.remove('hidden');overlayEl.textContent=n>0?n:'開始！';if(n<=0)setTimeout(()=>overlayEl.classList.add('hidden'),500)});
 s.on('go',x=>{cfg=x.settings;waitPanel.classList.add('hidden');gamePanel.classList.remove('hidden');topBar.classList.remove('hidden');overlayEl.classList.add('hidden');startGame(x.gameSeed,x.gameId,x.started,x.gameEnds,false)});
 s.on('gameTime',ms=>{if(!gamePanel.classList.contains('hidden')||completed)timerEl.textContent=ms==null?'∞':fmt(ms)});
 s.on('ranking',rs=>{latestRanking=rs;if(completed)renderCompleted(false)});
 s.on('completed',x=>{latestRanking=x.ranking||latestRanking;completed=true;clearInterval(ticker);lock=true;renderCompleted(false,x.mine)});
 s.on('finished',x=>{latestRanking=x.ranking||latestRanking;completed=true;clearInterval(ticker);lock=true;renderCompleted(true,null,x.reason)});
+
+function prepareGame(x){
+  if(!x?.gameId||!x?.gameSeed||!me||!code)return;
+  cfg=x.settings||cfg||{};
+  const nextCards=makeCards(personalSeed(x.gameSeed));
+  prepared={gameId:x.gameId,gameSeed:x.gameSeed,cards:nextCards,ready:false};
+  const urls=[...new Set(nextCards.filter(c=>c.img).map(c=>c.v))];
+  if(!urls.length){prepared.ready=true;assetStatusEl.textContent='✓ 牌面已準備完成';return}
+  assetStatusEl.textContent=`素材載入中 0/${urls.length}`;
+  preloadAssets(urls,(done,total)=>{if(prepared?.gameId===x.gameId)assetStatusEl.textContent=done>=total?'✓ 素材已準備完成':`素材載入中 ${done}/${total}`}).then(()=>{if(prepared?.gameId===x.gameId)prepared.ready=true});
+}
+async function preloadAssets(urls,onProgress){
+  let done=0,total=urls.length,index=0;
+  const worker=async()=>{while(index<total){const i=index++;await loadAsset(urls[i]);done++;onProgress?.(done,total)}};
+  // 每台裝置最多同時載入 4 張，避免所有玩家開賽瞬間把圖片請求塞滿。
+  const workers=Array.from({length:Math.min(4,total)},()=>worker());
+  await Promise.all(workers);
+}
+function loadAsset(url){
+  if(assetCache.get(url)==='ok')return Promise.resolve(true);
+  if(assetCache.get(url)?.then)return assetCache.get(url);
+  const p=new Promise(resolve=>{
+    let tries=0;
+    const attempt=()=>{
+      const img=new Image();
+      img.decoding='async';
+      img.onload=()=>{assetCache.set(url,'ok');resolve(true)};
+      img.onerror=()=>{tries++;if(tries<3)setTimeout(attempt,250*tries);else{assetCache.set(url,'failed');resolve(false)}};
+      img.src=tries?`${url}?retry=${Date.now()}`:url;
+    };
+    setTimeout(attempt,Math.floor(Math.random()*180));
+  });
+  assetCache.set(url,p);return p;
+}
+
 function startGame(seed,gameId,started,gameEnds,resume){
   cfg=cfg||{};currentGameSeed=seed||1;currentGameId=gameId||`${code}-${started||Date.now()}`;completed=false;resultEl.classList.add('hidden');gamePanel.classList.remove('hidden');topBar.classList.remove('hidden');
   const stored=loadState();
-  if(stored&&stored.gameId===currentGameId){score=stored.score||0;startAt=stored.startAt||started||Date.now();cards=stored.cards||[];renderBoard(stored.matched||[]);if((stored.matched||[]).length===cards.length&&cards.length){completed=true;lock=true;setTimeout(()=>s.emit('progress',{score,time:Date.now()-startAt,done:true},x=>{if(x?.ok){latestRanking=x.ranking||[];renderCompleted(false,x.mine)}}),50)}}else{score=0;startAt=started||Date.now();build(personalSeed(seed));saveState([])}
+  if(stored&&stored.gameId===currentGameId){
+    score=stored.score||0;startAt=stored.startAt||started||Date.now();cards=stored.cards||[];renderBoard(stored.matched||[]);
+    if((stored.matched||[]).length===cards.length&&cards.length){completed=true;lock=true;setTimeout(()=>sendProgress(true,true),50)}
+    else sendProgress(false,true);
+  }else{
+    score=0;startAt=started||Date.now();
+    if(prepared&&prepared.gameId===currentGameId&&prepared.gameSeed===currentGameSeed)cards=prepared.cards.map(c=>({...c}));
+    else cards=makeCards(personalSeed(seed));
+    renderBoard([]);saveState([]);
+  }
   scoreEl();clearInterval(ticker);
   if(gameEnds){ticker=setInterval(()=>{timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))},250);timerEl.textContent=fmt(Math.max(0,gameEnds-Date.now()))}else timerEl.textContent='∞';
 }
 function dims(){const v=String(cfg.boardSize||'4x4');const m=v.match(/(4|6|8)x\1/);if(m){const n=+m[1];return [n,n]}const total=Number(cfg.cards)||16;const n=total>=64?8:total>=36?6:4;return [n,n]}
-function build(seed){
+function makeCards(seed){
   const [cols,rows]=dims(),pairs=cols*rows/2;let src=[];
   if(cfg.type==='farm'){for(let i=1;i<=144;i++)src.push([`assets/farm/farm-${String(i).padStart(3,'0')}.png`,`assets/farm/farm-${String(i).padStart(3,'0')}.png`])}
   else src=(cfg.type==='idiom'?idioms:poems).map(x=>x.split('|'));
-  shuffle(src,seed);src=src.slice(0,pairs);cards=[];
-  src.forEach((p,i)=>{cards.push({key:i,v:p[0],img:cfg.type==='farm'});cards.push({key:i,v:p[1],img:cfg.type==='farm'})});
-  shuffle(cards,seed+17);renderBoard([])
+  shuffle(src,seed);src=src.slice(0,pairs);let out=[];
+  src.forEach((p,i)=>{out.push({key:i,v:p[0],img:cfg.type==='farm'});out.push({key:i,v:p[1],img:cfg.type==='farm'})});
+  shuffle(out,seed+17);return out;
 }
-function renderBoard(matched){const [cols]=dims();boardEl.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;boardEl.innerHTML=cards.map((c,i)=>`<div class="card${matched.includes(i)?' open matched':''}" data-i="${i}">${matched.includes(i)?cardInner(c):'<span>✦</span>'}</div>`).join('');[...boardEl.children].forEach(el=>el.onclick=()=>flip(el))}
-function flip(el){if(lock||completed||el.classList.contains('open')||el.classList.contains('matched'))return;open(el);if(!first){first=el;return}lock=true;let a=cards[+first.dataset.i],b=cards[+el.dataset.i];if(a.key===b.key){setTimeout(()=>{first.classList.add('matched');el.classList.add('matched');const matchedEls=[...document.querySelectorAll('.card.matched')].map(x=>+x.dataset.i);first=null;lock=false;score+=10;scoreEl();saveState(matchedEls);let done=matchedEls.length===cards.length;s.emit('progress',{score,time:Date.now()-startAt,done},()=>{});},280)}else setTimeout(()=>{close(first);close(el);first=null;lock=false},650)}
-function cardInner(c){return c.img?`<img src="${c.v}">`:`<span class="txt">${c.v}</span>`}
-function open(el){let c=cards[+el.dataset.i];el.classList.add('open');el.innerHTML=cardInner(c)}
+function renderBoard(matched){const [cols]=dims();boardEl.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;boardEl.innerHTML=cards.map((c,i)=>`<div class="card${matched.includes(i)?' open matched':''}" data-i="${i}">${matched.includes(i)?cardInner(c):'<span>✦</span>'}</div>`).join('');[...boardEl.children].forEach(el=>{el.onclick=()=>flip(el);bindImages(el)})}
+function flip(el){if(lock||completed||el.classList.contains('open')||el.classList.contains('matched'))return;open(el);if(!first){first=el;return}lock=true;let a=cards[+first.dataset.i],b=cards[+el.dataset.i];if(a.key===b.key){setTimeout(()=>{first.classList.add('matched');el.classList.add('matched');const matchedEls=[...document.querySelectorAll('.card.matched')].map(x=>+x.dataset.i);first=null;lock=false;score+=10;scoreEl();saveState(matchedEls);let done=matchedEls.length===cards.length;sendProgress(done,done);},280)}else setTimeout(()=>{close(first);close(el);first=null;lock=false},650)}
+function cardInner(c){return c.img?`<img src="${c.v}" data-src="${c.v}" alt="" decoding="async">`:`<span class="txt">${c.v}</span>`}
+function bindImages(root){root.querySelectorAll?.('img[data-src]').forEach(img=>{img.onerror=()=>retryVisibleImage(img)})}
+function retryVisibleImage(img){if(!img||img.dataset.retrying==='1')return;const base=img.dataset.src;let n=Number(img.dataset.tries||0);if(n>=2){img.onerror=null;img.classList.add('img-failed');img.alt='圖片載入失敗';return}img.dataset.retrying='1';img.dataset.tries=String(n+1);setTimeout(()=>{img.dataset.retrying='0';img.src=`${base}?retry=${Date.now()}`},300*(n+1))}
+function open(el){let c=cards[+el.dataset.i];el.classList.add('open');el.innerHTML=cardInner(c);bindImages(el)}
 function close(el){if(!el)return;el.classList.remove('open');el.innerHTML='<span>✦</span>'}
+
+function sendProgress(done=false,immediate=false){
+  pendingProgress={score,time:Date.now()-startAt,done:!!done};
+  if(done||immediate){flushProgress();return}
+  if(progressTimer)return;
+  const delay=Math.max(120,800-(Date.now()-lastProgressSentAt));
+  progressTimer=setTimeout(flushProgress,delay);
+}
+function flushProgress(){
+  if(progressTimer){clearTimeout(progressTimer);progressTimer=null}
+  if(!pendingProgress||!joinedOnce||!s.connected)return;
+  const payload=pendingProgress;pendingProgress=null;lastProgressSentAt=Date.now();
+  s.emit('progress',payload,x=>{if(payload.done&&x?.ok){latestRanking=x.ranking||latestRanking;completed=true;lock=true;renderCompleted(false,x.mine)}});
+}
+
 function renderCompleted(final=false,mineOverride=null,reason=''){
   gamePanel.classList.add('hidden');resultEl.classList.remove('hidden');const mine=mineOverride||latestRanking.find(x=>x.name===me);const tm=mine?.time==null?'—':fmt(mine.time);const sec=mine?.time==null?'':`（${Math.floor(mine.time/1000)}秒）`;
   resultEl.innerHTML=`<h2>${final?'🏁 本局結束':'🎉 配對完成！'}</h2><div class="myresult"><b>${mine?`第 ${mine.rank} 名`:'已完成'}</b><span>⭐ ${mine?.score??score} 分</span><span>⏱ 完成時間 ${tm}${sec}</span></div>${!final?'<p class="status">已完成，等待其他玩家完成…</p>':`<p class="status">${reason||'遊戲結束'}</p>`}<h3>🏆 ${final?'最終':'目前'}排行榜</h3><table class="ranking"><thead><tr><th>排名</th><th>玩家</th><th>分數</th><th>完成時間</th></tr></thead><tbody>${latestRanking.map(p=>`<tr><td>${p.rank}</td><td>${esc(p.name)}</td><td>${p.score}</td><td>${p.time==null?'—':fmt(p.time)}</td></tr>`).join('')}</tbody></table>`
@@ -81,10 +144,9 @@ function storageKey(){return `mk:${code}:game:${currentGameId}:${me}`}
 function saveState(matched){if(!currentGameId||!me)return;localStorage.setItem(storageKey(),JSON.stringify({gameId:currentGameId,startAt,score,cards,matched}))}
 function loadState(){if(!currentGameId||!me)return null;try{return JSON.parse(localStorage.getItem(storageKey())||'null')}catch{return null}}
 function personalSeed(base){return ((Number(base)||1)^hash(code+'|'+me))>>>0}
-function hash(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
-function shuffle(a,seed){let x=seed||1;for(let i=a.length-1;i>0;i--){x=(Math.imul(x,1664525)+1013904223)>>>0;let j=x%(i+1);[a[i],a[j]]=[a[j],a[i]]}}
-function fmt(ms){let x=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(x/60)).padStart(2,'0')}:${String(x%60).padStart(2,'0')}`}
-function label(x){return {farm:'🌱 種菜素材',idiom:'🀄 成語',poem:'📜 唐詩'}[x]}
-function ruleText(c){const gm=String(c.gameMinutes)==='unlimited'?'無限制':`${c.gameMinutes}分鐘`;return `${label(c.type)}｜${c.difficulty}｜${c.boardSize||c.cards+'張'}｜${gm}`}
+function hash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+function shuffle(a,seed){let x=(seed||1)>>>0;for(let i=a.length-1;i>0;i--){x=(Math.imul(x,1664525)+1013904223)>>>0;let j=x%(i+1);[a[i],a[j]]=[a[j],a[i]]}return a}
 function scoreEl(){$('score').textContent=score}
+function fmt(ms){let x=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(x/60)).padStart(2,'0')}:${String(x%60).padStart(2,'0')}`}
+function ruleText(c){const type={farm:'🌱 種菜素材',idiom:'🀄 成語',poem:'📜 唐詩'}[c.type]||c.type,gm=String(c.gameMinutes)==='unlimited'?'∞ 無限制':`${c.gameMinutes} 分鐘`;return `${type}｜${c.difficulty}｜${c.boardSize}｜遊戲時間 ${gm}`}
 function esc(x){return String(x).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}

@@ -117,3 +117,7 @@ input,select,textarea{border-color:#cfd4ef;background:#fff;border-radius:10px}
 /* V1.1.8 scheduled start player display */
 .scheduled-countdown{margin:10px auto 4px;padding:12px 16px;max-width:460px;border-radius:14px;background:#f0ecff;border:1.5px solid #d8d0ff;color:#493aa2;font-weight:1000;text-align:center;font-size:18px}
 #waitStatus{font-size:22px;font-weight:1000;color:#d24e70}
+
+/* V1.1.9 多人順暢版：素材預載狀態與圖片失敗提示 */
+.asset-status{min-height:1.4em;margin:8px 0 2px;font-weight:800;color:#6754a8;text-align:center}
+.card img.img-failed{opacity:.25}
