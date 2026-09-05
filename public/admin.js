@@ -1,9 +1,9 @@
-if(!sessionStorage.mkAdmin)location='admin-login.html';
-const s=io();let room='';const $=id=>document.getElementById(id);
+if(!sessionStorage.mkAdminToken)location='admin-login.html';
+const s=io({auth:{adminToken:sessionStorage.mkAdminToken}});let room='';const $=id=>document.getElementById(id);
 function settings(){return {type:$('type').value,difficulty:$('difficulty').value,cards:+$('cards').value,startCountdown:+$('startCountdown').value,gameMinutes:+$('gameMinutes').value,finishGoal:$('finishGoal').value,note:$('note').value}}
 function notice(id,text){$(id).textContent=text;setTimeout(()=>{if($(id).textContent===text)$(id).textContent=''},1800)}
 async function copyText(text,id='copyMsg'){try{await navigator.clipboard.writeText(text);notice(id,'✓ 已複製')}catch{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();notice(id,'✓ 已複製')}}
-$('newRoom').onclick=()=>s.emit('createRoom',settings(),x=>{room=x.code;$('code').textContent=room;$('state').textContent='等待玩家';$('startTimer').textContent='--';$('gameTimer').textContent='--:--'});
+$('newRoom').onclick=()=>s.emit('createRoom',settings(),x=>{if(!x?.ok){alert(x?.msg||'建立房間失敗');sessionStorage.removeItem('mkAdminToken');location='admin-login.html';return}room=x.code;$('code').textContent=room;$('state').textContent='等待玩家';$('startTimer').textContent='--';$('gameTimer').textContent='--:--'});
 $('save').onclick=()=>{if(room)s.emit('saveSettings',{code:room,settings:settings()});notice('saved','✓ 已儲存')};
 $('start').onclick=()=>room&&s.emit('start',{code:room});
 $('del').onclick=()=>{if(room&&confirm('確定刪除房間？'))s.emit('deleteRoom',{code:room})};
