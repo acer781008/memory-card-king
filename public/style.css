@@ -127,3 +127,16 @@ body.game-light{background-attachment:scroll}
 body.game-light .board{backdrop-filter:none!important;box-shadow:none!important;background:rgba(248,247,255,.97)!important}
 body.game-light .card{box-shadow:none!important;transition:none!important}
 body.game-light .topbar{box-shadow:none!important;backdrop-filter:none!important}
+
+
+/* V1.2.1 - 手機整盤自動縮放：4x4 / 6x6 / 8x8 全部牌同一畫面可見 */
+body.game-light{overflow:hidden!important;}
+body.game-light .wrap{max-width:none!important;padding:2px 4px 4px!important;}
+body.game-light #game{max-width:none!important;margin:4px auto 0!important;display:flex;justify-content:center;align-items:flex-start;}
+body.game-light .topbar{position:relative!important;margin:2px 4px 0!important;padding:7px 10px!important;min-height:34px;box-sizing:border-box;}
+body.game-light .board{box-sizing:border-box!important;margin:0 auto!important;border-width:2px!important;border-radius:12px!important;overflow:hidden!important;}
+body.game-light .card{box-sizing:border-box!important;aspect-ratio:auto!important;min-width:0!important;min-height:0!important;padding:2px!important;border-width:2px!important;border-radius:7px!important;}
+body.game-light .card:not(.open):not(.matched):after{font-size:clamp(13px,4vw,30px)!important;}
+body.game-light .card img{width:96%!important;height:96%!important;object-fit:contain!important;}
+body.game-light .card .txt{font-size:clamp(8px,2.25vw,18px)!important;line-height:1.08!important;}
+@media(max-width:760px){body.game-light .topbar{font-size:13px!important;gap:6px!important;}body.game-light #game{margin-top:2px!important;}}

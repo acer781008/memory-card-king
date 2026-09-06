@@ -135,13 +135,57 @@ function makeCards(seed){
   src.forEach((p,i)=>{out.push({key:i,v:p[0],img:cfg.type==='farm'});out.push({key:i,v:p[1],img:cfg.type==='farm'})});
   shuffle(out,seed+17);return out;
 }
-function renderBoard(matched){const [cols]=dims();boardEl.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;boardEl.innerHTML=cards.map((c,i)=>`<div class="card${matched.includes(i)?' open matched':''}" data-i="${i}">${matched.includes(i)?cardInner(c):'<span>✦</span>'}</div>`).join('');[...boardEl.children].forEach(el=>{el.onclick=()=>flip(el);bindImages(el)})}
+function renderBoard(matched){
+  const [cols,rows]=dims();
+  boardEl.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;
+  boardEl.style.gridTemplateRows=`repeat(${rows},minmax(0,1fr))`;
+  boardEl.innerHTML=cards.map((c,i)=>`<div class="card${matched.includes(i)?' open matched':''}" data-i="${i}">${matched.includes(i)?cardInner(c):'<span>✦</span>'}</div>`).join('');
+  [...boardEl.children].forEach(el=>{el.onclick=()=>flip(el);bindImages(el)});
+  requestAnimationFrame(fitBoardToViewport);
+}
 function flip(el){if(lock||completed||el.classList.contains('open')||el.classList.contains('matched'))return;open(el);if(!first){first=el;return}lock=true;let a=cards[+first.dataset.i],b=cards[+el.dataset.i];if(a.key===b.key){setTimeout(()=>{first.classList.add('matched');el.classList.add('matched');const matchedEls=[...document.querySelectorAll('.card.matched')].map(x=>+x.dataset.i);first=null;lock=false;score+=10;scoreEl();saveState(matchedEls);let done=matchedEls.length===cards.length;sendProgress(done,done);},280)}else setTimeout(()=>{close(first);close(el);first=null;lock=false},650)}
 function cardInner(c){return c.img?`<img src="${assetUrl(c.v)}" data-src="${c.v}" alt="" decoding="sync">`:`<span class="txt">${c.v}</span>`}
 function bindImages(root){root.querySelectorAll?.('img[data-src]').forEach(img=>{img.onerror=()=>retryVisibleImage(img)})}
 function retryVisibleImage(img){if(!img)return;const base=img.dataset.src;loadAsset(base).then(local=>{if(img.isConnected)img.src=local})}
 function open(el){let c=cards[+el.dataset.i];el.classList.add('open');el.innerHTML=cardInner(c);bindImages(el)}
 function close(el){if(!el)return;el.classList.remove('open');el.innerHTML='<span>✦</span>'}
+
+function fitBoardToViewport(){
+  if(gamePanel.classList.contains('hidden')||!cards.length)return;
+  const [cols,rows]=dims();
+  const vv=window.visualViewport;
+  const vw=Math.max(280,Math.floor(vv?.width||window.innerWidth));
+  const vh=Math.max(360,Math.floor(vv?.height||window.innerHeight));
+  const topH=topBar.classList.contains('hidden')?0:Math.ceil(topBar.getBoundingClientRect().height);
+  const outerX=8;
+  const outerY=8;
+  const gap=cols>=8?3:cols>=6?4:5;
+  const pad=cols>=8?4:cols>=6?5:6;
+  const border=2;
+  const availW=Math.max(180,vw-outerX*2);
+  const availH=Math.max(180,vh-topH-outerY*2);
+  const cellW=(availW-pad*2-border*2-gap*(cols-1))/cols;
+  const cellH=(availH-pad*2-border*2-gap*(rows-1))/rows;
+  const cell=Math.max(20,Math.floor(Math.min(cellW,cellH)));
+  const boardW=cell*cols+gap*(cols-1)+pad*2+border*2;
+  const boardH=cell*rows+gap*(rows-1)+pad*2+border*2;
+  boardEl.style.setProperty('--fit-cell',cell+'px');
+  boardEl.style.setProperty('--fit-gap',gap+'px');
+  boardEl.style.setProperty('--fit-pad',pad+'px');
+  boardEl.style.width=boardW+'px';
+  boardEl.style.height=boardH+'px';
+  boardEl.style.maxWidth='none';
+  boardEl.style.gap=gap+'px';
+  boardEl.style.padding=pad+'px';
+  boardEl.style.gridTemplateColumns=`repeat(${cols},${cell}px)`;
+  boardEl.style.gridTemplateRows=`repeat(${rows},${cell}px)`;
+  boardEl.querySelectorAll('.card').forEach(el=>{el.style.width=cell+'px';el.style.height=cell+'px'});
+}
+let fitBoardTimer=null;
+function scheduleBoardFit(){clearTimeout(fitBoardTimer);fitBoardTimer=setTimeout(fitBoardToViewport,60)}
+window.addEventListener('resize',scheduleBoardFit,{passive:true});
+window.addEventListener('orientationchange',()=>setTimeout(fitBoardToViewport,180),{passive:true});
+window.visualViewport?.addEventListener('resize',scheduleBoardFit,{passive:true});
 
 function sendProgress(done=false,immediate=false){
   pendingProgress={score,time:Date.now()-startAt,done:!!done};
