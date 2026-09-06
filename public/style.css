@@ -140,3 +140,28 @@ body.game-light .card:not(.open):not(.matched):after{font-size:clamp(13px,4vw,30
 body.game-light .card img{width:96%!important;height:96%!important;object-fit:contain!important;}
 body.game-light .card .txt{font-size:clamp(8px,2.25vw,18px)!important;line-height:1.08!important;}
 @media(max-width:760px){body.game-light .topbar{font-size:13px!important;gap:6px!important;}body.game-light #game{margin-top:2px!important;}}
+
+
+/* V1.2.2 - 玩家頁全面輕量化 + 遊戲盤面真正填滿可視畫面 */
+body.player-page{
+  background:#eef2ff!important;
+  background-image:none!important;
+  background-attachment:scroll!important;
+}
+body.player-page:before{display:none!important}
+body.player-page .panel{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  background:#fff!important;
+  box-shadow:0 3px 10px rgba(62,53,104,.10)!important;
+}
+body.player-page input,body.player-page button{transition:none!important}
+body.player-page .hero h1{filter:none!important;text-shadow:none!important}
+body.player-page.game-light .wrap{height:calc(100dvh - 42px)!important;overflow:hidden!important;padding:0 4px 3px!important}
+body.player-page.game-light #game{height:100%!important;width:100%!important;margin:0!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important}
+body.player-page.game-light .topbar{height:40px!important;min-height:40px!important;margin:0!important;padding:5px 8px!important;border:0!important;border-bottom:1px solid #d9ddf0!important;border-radius:0!important;background:#fff!important}
+body.player-page.game-light .board{background:#f7f7ff!important;border:2px solid #dcdcf0!important;border-radius:8px!important;box-shadow:none!important}
+body.player-page.game-light .card{border-radius:5px!important;border-width:1.5px!important;background:#7562dc!important;box-shadow:none!important}
+body.player-page.game-light .card.open,body.player-page.game-light .card.matched{background:#fff!important}
+body.player-page.game-light .card img{width:98%!important;height:98%!important}
+@supports not (height:100dvh){body.player-page.game-light .wrap{height:calc(100vh - 42px)!important}}

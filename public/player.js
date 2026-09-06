@@ -157,29 +157,25 @@ function fitBoardToViewport(){
   const vw=Math.max(280,Math.floor(vv?.width||window.innerWidth));
   const vh=Math.max(360,Math.floor(vv?.height||window.innerHeight));
   const topH=topBar.classList.contains('hidden')?0:Math.ceil(topBar.getBoundingClientRect().height);
-  const outerX=8;
-  const outerY=8;
-  const gap=cols>=8?3:cols>=6?4:5;
-  const pad=cols>=8?4:cols>=6?5:6;
+  // 盤面吃滿「標題列以下」的可視區。卡片可略呈長方形，不再被正方形限制浪費高度。
+  const outerX=4, outerY=4;
+  const gap=cols>=8?2:cols>=6?3:4;
+  const pad=cols>=8?3:cols>=6?4:5;
   const border=2;
   const availW=Math.max(180,vw-outerX*2);
   const availH=Math.max(180,vh-topH-outerY*2);
-  const cellW=(availW-pad*2-border*2-gap*(cols-1))/cols;
-  const cellH=(availH-pad*2-border*2-gap*(rows-1))/rows;
-  const cell=Math.max(20,Math.floor(Math.min(cellW,cellH)));
-  const boardW=cell*cols+gap*(cols-1)+pad*2+border*2;
-  const boardH=cell*rows+gap*(rows-1)+pad*2+border*2;
-  boardEl.style.setProperty('--fit-cell',cell+'px');
-  boardEl.style.setProperty('--fit-gap',gap+'px');
-  boardEl.style.setProperty('--fit-pad',pad+'px');
+  const cellW=Math.max(18,Math.floor((availW-pad*2-border*2-gap*(cols-1))/cols));
+  const cellH=Math.max(18,Math.floor((availH-pad*2-border*2-gap*(rows-1))/rows));
+  const boardW=cellW*cols+gap*(cols-1)+pad*2+border*2;
+  const boardH=cellH*rows+gap*(rows-1)+pad*2+border*2;
   boardEl.style.width=boardW+'px';
   boardEl.style.height=boardH+'px';
   boardEl.style.maxWidth='none';
   boardEl.style.gap=gap+'px';
   boardEl.style.padding=pad+'px';
-  boardEl.style.gridTemplateColumns=`repeat(${cols},${cell}px)`;
-  boardEl.style.gridTemplateRows=`repeat(${rows},${cell}px)`;
-  boardEl.querySelectorAll('.card').forEach(el=>{el.style.width=cell+'px';el.style.height=cell+'px'});
+  boardEl.style.gridTemplateColumns=`repeat(${cols},${cellW}px)`;
+  boardEl.style.gridTemplateRows=`repeat(${rows},${cellH}px)`;
+  boardEl.querySelectorAll('.card').forEach(el=>{el.style.width=cellW+'px';el.style.height=cellH+'px'});
 }
 let fitBoardTimer=null;
 function scheduleBoardFit(){clearTimeout(fitBoardTimer);fitBoardTimer=setTimeout(fitBoardToViewport,60)}
